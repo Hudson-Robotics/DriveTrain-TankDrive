@@ -4,41 +4,120 @@
 
 package frc.robot;
 
-import edu.wpi.first.util.sendable.SendableRegistry;
-import edu.wpi.first.wpilibj.Joystick;
+import com.ctre.phoenix.motorcontrol.ControlMode;
+import com.ctre.phoenix.motorcontrol.can.TalonSRX;
 import edu.wpi.first.wpilibj.TimedRobot;
-import edu.wpi.first.wpilibj.drive.DifferentialDrive;
-import edu.wpi.first.wpilibj.motorcontrol.PWMSparkMax;
+import edu.wpi.first.wpilibj.XboxController;
 
 /**
- * This is a demo program showing the use of the DifferentialDrive class, specifically it contains
- * the code necessary to operate a robot with tank drive.
+ * This is a demo program showing the use of tank drive with TalonSRX motors.
+ * Supports tank drive, arcade drive, and cheesy drive modes with button switching.
  */
 public class Robot extends TimedRobot {
-  private final DifferentialDrive m_robotDrive;
-  private final Joystick m_leftStick;
-  private final Joystick m_rightStick;
+  // Motor definitions
+  private final TalonSRX motor1 = new TalonSRX(1);
+  private final TalonSRX motor2 = new TalonSRX(2);
+  private final TalonSRX motor3 = new TalonSRX(3);
+  private final TalonSRX motor4 = new TalonSRX(4);
 
-  private final PWMSparkMax m_leftMotor = new PWMSparkMax(0);
-  private final PWMSparkMax m_rightMotor = new PWMSparkMax(1);
+  // Controller
+  private final XboxController drivController = new XboxController(0);
+
+  // Drive mode enumeration
+  private enum DriveMode {
+    TANK,
+    ARCADE,
+    CHEESY
+  }
+
+  private DriveMode currentMode = DriveMode.TANK;
 
   /** Called once at the beginning of the robot program. */
   public Robot() {
-    // We need to invert one side of the drivetrain so that positive voltages
-    // result in both sides moving forward. Depending on how your robot's
-    // gearbox is constructed, you might have to invert the left side instead.
-    m_rightMotor.setInverted(true);
-
-    m_robotDrive = new DifferentialDrive(m_leftMotor::set, m_rightMotor::set);
-    m_leftStick = new Joystick(0);
-    m_rightStick = new Joystick(1);
-
-    SendableRegistry.addChild(m_robotDrive, m_leftMotor);
-    SendableRegistry.addChild(m_robotDrive, m_rightMotor);
+    // Invert right side motors so that positive voltages result in both sides moving forward
+    motor2.setInverted(true);
+    motor4.setInverted(true);
   }
 
   @Override
   public void teleopPeriodic() {
-    m_robotDrive.tankDrive(-m_leftStick.getY(), -m_rightStick.getY());
+    // Check for drive mode switching buttons
+    if (drivController.getAButton()) {
+      currentMode = DriveMode.TANK;
+    } else if (drivController.getBButton()) {
+      currentMode = DriveMode.ARCADE;
+    } else if (drivController.getXButton()) {
+      currentMode = DriveMode.CHEESY;
+    }
+
+    // Execute the current drive mode
+    switch (currentMode) {
+      case TANK:
+        tankDrive();
+        break;
+      case ARCADE:
+        arcadeDrive();
+        break;
+      case CHEESY:
+        cheesyDrive();
+        break;
+    }
+  }
+
+  /**
+   * Tank Drive: Left joystick controls left side, right joystick controls right side.
+   */
+  private void tankDrive() {
+    double leftSpeed = -drivController.getLeftY();
+    double rightSpeed = -drivController.getRightY();
+
+    motor1.set(ControlMode.PercentOutput, leftSpeed);
+    motor2.set(ControlMode.PercentOutput, leftSpeed);
+    motor3.set(ControlMode.PercentOutput, rightSpeed);
+    motor4.set(ControlMode.PercentOutput, rightSpeed);
+  }
+
+  /**
+   * Arcade Drive: Left stick Y controls forward/backward, right stick X controls rotation.
+   */
+  private void arcadeDrive() {
+    double forwardSpeed = -drivController.getLeftY();
+    double rotationSpeed = drivController.getRightX();
+
+    // Mix forward and rotation for arcade drive
+    double leftSpeed = forwardSpeed + rotationSpeed;
+    double rightSpeed = forwardSpeed - rotationSpeed;
+
+    // Clamp values between -1 and 1
+    leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
+    rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
+
+    motor1.set(ControlMode.PercentOutput, leftSpeed);
+    motor2.set(ControlMode.PercentOutput, leftSpeed);
+    motor3.set(ControlMode.PercentOutput, rightSpeed);
+    motor4.set(ControlMode.PercentOutput, rightSpeed);
+  }
+
+  /**
+   * Cheesy Drive: Similar to arcade, but with reduced rotation sensitivity at high speeds.
+   */
+  private void cheesyDrive() {
+    double forwardSpeed = -drivController.getLeftY();
+    double rotationSpeed = drivController.getRightX();
+
+    // Apply reduced sensitivity to rotation (cheesy drive characteristic)
+    rotationSpeed = rotationSpeed * (1.0 - (Math.abs(forwardSpeed) * 0.5));
+
+    double leftSpeed = forwardSpeed + rotationSpeed;
+    double rightSpeed = forwardSpeed - rotationSpeed;
+
+    // Clamp values between -1 and 1
+    leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
+    rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
+
+    motor1.set(ControlMode.PercentOutput, leftSpeed);
+    motor2.set(ControlMode.PercentOutput, leftSpeed);
+    motor3.set(ControlMode.PercentOutput, rightSpeed);
+    motor4.set(ControlMode.PercentOutput, rightSpeed);
   }
 }
