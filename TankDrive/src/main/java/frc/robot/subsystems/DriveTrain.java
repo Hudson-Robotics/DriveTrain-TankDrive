@@ -3,6 +3,8 @@ package frc.robot.subsystems;
 import com.ctre.phoenix.motorcontrol.ControlMode;
 import com.ctre.phoenix.motorcontrol.can.TalonSRX;
 
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.DifferentialDriveOdometry;
 import edu.wpi.first.networktables.NetworkTableInstance;
@@ -28,9 +30,11 @@ public class DriveTrain extends SubsystemBase {
 
     private static final double MAX_WHEEL_SPEED = (MAX_RPM / GEAR_RATIO) * (Math.PI * WHEEL_DIAMETER_METERS) / 60.0;
 
-          // Odometry for simulated pose
-  private final DifferentialDriveOdometry odometry =
-      new DifferentialDriveOdometry(new Rotation2d(), 0, 0);
+    // Odometry for simulated pose
+    private final DifferentialDriveOdometry odometry = new DifferentialDriveOdometry(new Rotation2d(), 0, 0);
+
+    private final SlewRateLimiter forwardLimiter = new SlewRateLimiter(3.0);
+    private final SlewRateLimiter turnLimiter = new SlewRateLimiter(4.0);
 
     public DriveTrain() {
         // Initialize motors and configurations here
@@ -39,6 +43,9 @@ public class DriveTrain extends SubsystemBase {
     }
 
     public void tankDrive(double leftSpeed, double rightSpeed) {
+        leftSpeed = MathUtil.clamp(shapeInput(leftSpeed), -1, 1);
+        rightSpeed = MathUtil.clamp(shapeInput(rightSpeed), -1, 1);
+
         motor1.set(ControlMode.PercentOutput, leftSpeed);
         motor2.set(ControlMode.PercentOutput, leftSpeed);
         motor3.set(ControlMode.PercentOutput, rightSpeed);
@@ -48,13 +55,15 @@ public class DriveTrain extends SubsystemBase {
     }
 
     public void arcadeDrive(double forwardSpeed, double rotationSpeed) {
-        // Mix forward and rotation for arcade drive
+        forwardSpeed = forwardLimiter.calculate(shapeInput(forwardSpeed));
+        rotationSpeed = turnLimiter.calculate(shapeInput(rotationSpeed));
+
         double leftSpeed = forwardSpeed + rotationSpeed;
         double rightSpeed = forwardSpeed - rotationSpeed;
 
         // Clamp values between -1 and 1
-        leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
-        rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
+        leftSpeed = MathUtil.clamp(leftSpeed, -1, 1);
+        rightSpeed = MathUtil.clamp(rightSpeed, -1, 1);
 
         motor1.set(ControlMode.PercentOutput, leftSpeed);
         motor2.set(ControlMode.PercentOutput, leftSpeed);
@@ -65,6 +74,9 @@ public class DriveTrain extends SubsystemBase {
     }
 
     public void cheesyDrive(double forwardSpeed, double rotationSpeed) {
+        forwardSpeed = forwardLimiter.calculate(shapeInput(forwardSpeed));
+        rotationSpeed = turnLimiter.calculate(shapeInput(rotationSpeed));
+        
         // Apply reduced sensitivity to rotation (cheesy drive characteristic)
         rotationSpeed = rotationSpeed * (1.0 - (Math.abs(forwardSpeed) * 0.5));
 
@@ -72,8 +84,8 @@ public class DriveTrain extends SubsystemBase {
         double rightSpeed = forwardSpeed - rotationSpeed;
 
         // Clamp values between -1 and 1
-        leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
-        rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
+        leftSpeed = MathUtil.clamp(leftSpeed, -1, 1);
+        rightSpeed = MathUtil.clamp(rightSpeed, -1, 1);
 
         motor1.set(ControlMode.PercentOutput, leftSpeed);
         motor2.set(ControlMode.PercentOutput, leftSpeed);
@@ -134,5 +146,10 @@ public class DriveTrain extends SubsystemBase {
         table.getEntry("Pose").setDoubleArray(poseArray);
 
         Logger.recordOutput("Drive/Pose", odometry.getPoseMeters());
+    }
+
+    private double shapeInput(double input) {
+        double deadbanded = MathUtil.applyDeadband(input, 0.05);
+        return 0.5 * deadbanded + 0.5 * Math.pow(deadbanded, 3);
     }
 }
