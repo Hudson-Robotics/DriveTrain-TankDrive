@@ -4,9 +4,12 @@
 
 package frc.robot;
 
+import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.XboxController;
 import frc.robot.subsystems.DriveTrain;
+
+import org.littletonrobotics.junction.Logger; // AdvantageKit
 
 /**
  * This is a demo program showing the use of tank drive with TalonSRX motors.
@@ -87,5 +90,14 @@ public class Robot extends TimedRobot {
     double rotationSpeed = drivController.getRightX();
 
     driveTrain.cheesyDrive(forwardSpeed, rotationSpeed);
+  }
+
+    private void logDriveMode() {
+    NetworkTableInstance.getDefault()
+        .getTable("Drive")
+        .getEntry("Mode")
+        .setString(currentMode.toString());
+
+    Logger.recordOutput("Drive/Mode", currentMode.toString());
   }
 }
