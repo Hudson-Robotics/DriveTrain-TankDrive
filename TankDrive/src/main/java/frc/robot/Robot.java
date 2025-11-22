@@ -4,10 +4,9 @@
 
 package frc.robot;
 
-import com.ctre.phoenix.motorcontrol.ControlMode;
-import com.ctre.phoenix.motorcontrol.can.TalonSRX;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.XboxController;
+import frc.robot.subsystems.DriveTrain;
 
 /**
  * This is a demo program showing the use of tank drive with TalonSRX motors.
@@ -15,10 +14,7 @@ import edu.wpi.first.wpilibj.XboxController;
  */
 public class Robot extends TimedRobot {
   // Motor definitions
-  private final TalonSRX motor1 = new TalonSRX(1);
-  private final TalonSRX motor2 = new TalonSRX(2);
-  private final TalonSRX motor3 = new TalonSRX(3);
-  private final TalonSRX motor4 = new TalonSRX(4);
+
 
   // Controller
   private final XboxController drivController = new XboxController(0);
@@ -31,12 +27,11 @@ public class Robot extends TimedRobot {
   }
 
   private DriveMode currentMode = DriveMode.TANK;
+  private DriveTrain driveTrain= new DriveTrain();
 
   /** Called once at the beginning of the robot program. */
   public Robot() {
-    // Invert right side motors so that positive voltages result in both sides moving forward
-    motor2.setInverted(true);
-    motor4.setInverted(true);
+
   }
 
   @Override
@@ -71,10 +66,7 @@ public class Robot extends TimedRobot {
     double leftSpeed = -drivController.getLeftY();
     double rightSpeed = -drivController.getRightY();
 
-    motor1.set(ControlMode.PercentOutput, leftSpeed);
-    motor2.set(ControlMode.PercentOutput, leftSpeed);
-    motor3.set(ControlMode.PercentOutput, rightSpeed);
-    motor4.set(ControlMode.PercentOutput, rightSpeed);
+    driveTrain.tankDrive(leftSpeed, rightSpeed);
   }
 
   /**
@@ -84,18 +76,7 @@ public class Robot extends TimedRobot {
     double forwardSpeed = -drivController.getLeftY();
     double rotationSpeed = drivController.getRightX();
 
-    // Mix forward and rotation for arcade drive
-    double leftSpeed = forwardSpeed + rotationSpeed;
-    double rightSpeed = forwardSpeed - rotationSpeed;
-
-    // Clamp values between -1 and 1
-    leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
-    rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
-
-    motor1.set(ControlMode.PercentOutput, leftSpeed);
-    motor2.set(ControlMode.PercentOutput, leftSpeed);
-    motor3.set(ControlMode.PercentOutput, rightSpeed);
-    motor4.set(ControlMode.PercentOutput, rightSpeed);
+    driveTrain.arcadeDrive(forwardSpeed, rotationSpeed);
   }
 
   /**
@@ -105,19 +86,6 @@ public class Robot extends TimedRobot {
     double forwardSpeed = -drivController.getLeftY();
     double rotationSpeed = drivController.getRightX();
 
-    // Apply reduced sensitivity to rotation (cheesy drive characteristic)
-    rotationSpeed = rotationSpeed * (1.0 - (Math.abs(forwardSpeed) * 0.5));
-
-    double leftSpeed = forwardSpeed + rotationSpeed;
-    double rightSpeed = forwardSpeed - rotationSpeed;
-
-    // Clamp values between -1 and 1
-    leftSpeed = Math.max(-1, Math.min(1, leftSpeed));
-    rightSpeed = Math.max(-1, Math.min(1, rightSpeed));
-
-    motor1.set(ControlMode.PercentOutput, leftSpeed);
-    motor2.set(ControlMode.PercentOutput, leftSpeed);
-    motor3.set(ControlMode.PercentOutput, rightSpeed);
-    motor4.set(ControlMode.PercentOutput, rightSpeed);
+    driveTrain.cheesyDrive(forwardSpeed, rotationSpeed);
   }
 }
