@@ -2,15 +2,24 @@ package frc.robot.subsystems;
 
 import com.ctre.phoenix.motorcontrol.ControlMode;
 import com.ctre.phoenix.motorcontrol.can.TalonSRX;
+import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.commands.PathPlannerAuto;
+import com.pathplanner.lib.config.RobotConfig;
+import com.pathplanner.lib.controllers.PPLTVController;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.filter.SlewRateLimiter;
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.math.kinematics.DifferentialDriveKinematics;
 import edu.wpi.first.math.kinematics.DifferentialDriveOdometry;
 import edu.wpi.first.networktables.NetworkTableInstance;
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
-import org.littletonrobotics.junction.Logger; 
+import org.littletonrobotics.junction.Logger;
 
 public class DriveTrain extends SubsystemBase {
     private final TalonSRX motor1 = new TalonSRX(1);
@@ -18,9 +27,14 @@ public class DriveTrain extends SubsystemBase {
     private final TalonSRX motor3 = new TalonSRX(3);
     private final TalonSRX motor4 = new TalonSRX(4);
 
+    // Simulation state
     private double simLeftDistance = 0.0;
     private double simRightDistance = 0.0;
     private double simHeadingRadians = 0.0;
+
+    // Instantaneous simulated wheel speeds (m/s)
+    private double simLeftSpeedMps = 0.0;
+    private double simRightSpeedMps = 0.0;
 
     // --- Simulation constants (replace with your robot’s actual values) ---
     private static final double MAX_RPM = 5330; // CIM motor free speed
@@ -36,10 +50,30 @@ public class DriveTrain extends SubsystemBase {
     private final SlewRateLimiter forwardLimiter = new SlewRateLimiter(3.0);
     private final SlewRateLimiter turnLimiter = new SlewRateLimiter(4.0);
 
+    private RobotConfig config;
+
+    private final DifferentialDriveKinematics kinematics = new DifferentialDriveKinematics(TRACK_WIDTH_METERS);
+
     public DriveTrain() {
-        // Initialize motors and configurations here
         motor2.setInverted(true);
         motor4.setInverted(true);
+
+        try {
+            config = RobotConfig.fromGUISettings();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        AutoBuilder.configure(
+            this::getPose2d,              // Robot pose supplier
+            this::resetPose,              // Reset odometry to starting pose
+            this::getChassisSpeeds,       // Robot-relative chassis speeds (instantaneous)
+            (speeds, ff) -> driveRobot(speeds), // Drive callback using ROBOT-RELATIVE ChassisSpeeds
+            new PPLTVController(0.02),    // Built-in differential drive controller
+            config,
+            () -> DriverStation.getAlliance().map(a -> a == DriverStation.Alliance.Red).orElse(false),
+            this
+        );
     }
 
     public void tankDrive(double leftSpeed, double rightSpeed) {
@@ -58,12 +92,8 @@ public class DriveTrain extends SubsystemBase {
         forwardSpeed = forwardLimiter.calculate(shapeInput(forwardSpeed));
         rotationSpeed = turnLimiter.calculate(shapeInput(rotationSpeed));
 
-        double leftSpeed = forwardSpeed + rotationSpeed;
-        double rightSpeed = forwardSpeed - rotationSpeed;
-
-        // Clamp values between -1 and 1
-        leftSpeed = MathUtil.clamp(leftSpeed, -1, 1);
-        rightSpeed = MathUtil.clamp(rightSpeed, -1, 1);
+        double leftSpeed = MathUtil.clamp(forwardSpeed + rotationSpeed, -1, 1);
+        double rightSpeed = MathUtil.clamp(forwardSpeed - rotationSpeed, -1, 1);
 
         motor1.set(ControlMode.PercentOutput, leftSpeed);
         motor2.set(ControlMode.PercentOutput, leftSpeed);
@@ -76,16 +106,11 @@ public class DriveTrain extends SubsystemBase {
     public void cheesyDrive(double forwardSpeed, double rotationSpeed) {
         forwardSpeed = forwardLimiter.calculate(shapeInput(forwardSpeed));
         rotationSpeed = turnLimiter.calculate(shapeInput(rotationSpeed));
-        
-        // Apply reduced sensitivity to rotation (cheesy drive characteristic)
+
         rotationSpeed = rotationSpeed * (1.0 - (Math.abs(forwardSpeed) * 0.5));
 
-        double leftSpeed = forwardSpeed + rotationSpeed;
-        double rightSpeed = forwardSpeed - rotationSpeed;
-
-        // Clamp values between -1 and 1
-        leftSpeed = MathUtil.clamp(leftSpeed, -1, 1);
-        rightSpeed = MathUtil.clamp(rightSpeed, -1, 1);
+        double leftSpeed = MathUtil.clamp(forwardSpeed + rotationSpeed, -1, 1);
+        double rightSpeed = MathUtil.clamp(forwardSpeed - rotationSpeed, -1, 1);
 
         motor1.set(ControlMode.PercentOutput, leftSpeed);
         motor2.set(ControlMode.PercentOutput, leftSpeed);
@@ -95,61 +120,102 @@ public class DriveTrain extends SubsystemBase {
         logDriveSignals(leftSpeed, rightSpeed);
     }
 
-    private void logDriveSignals(double left, double right) {
+    @Override
+    public void periodic() {
+        // Do NOT call logDriveSignals here with motor percents,
+        // to avoid double-integrating or clobbering sim speeds unexpectedly.
+        // You can still log current pose:
+        Logger.recordOutput("Drive/Pose", odometry.getPoseMeters());
+    }
+
+    private void logDriveSignals(double leftPercent, double rightPercent) {
         var table = NetworkTableInstance.getDefault().getTable("Drive");
 
-        // Raw outputs and joystick inputs
-        table.getEntry("LeftOutput").setDouble(left);
-        table.getEntry("RightOutput").setDouble(right);
+        // Raw outputs
+        table.getEntry("LeftOutput").setDouble(leftPercent);
+        table.getEntry("RightOutput").setDouble(rightPercent);
+        Logger.recordOutput("Drive/LeftOutput", leftPercent);
+        Logger.recordOutput("Drive/RightOutput", rightPercent);
 
-        Logger.recordOutput("Drive/LeftOutput", left);
-        Logger.recordOutput("Drive/RightOutput", right);
+        // Convert to instantaneous wheel speeds (m/s) and cache for getChassisSpeeds()
+        simLeftSpeedMps = leftPercent * MAX_WHEEL_SPEED;
+        simRightSpeedMps = rightPercent * MAX_WHEEL_SPEED;
 
-        // Convert to wheel speeds (m/s)
-        double leftSpeedMps = left * MAX_WHEEL_SPEED;
-        double rightSpeedMps = right * MAX_WHEEL_SPEED;
-
-        table.getEntry("LeftSpeedMps").setDouble(leftSpeedMps);
-        table.getEntry("RightSpeedMps").setDouble(rightSpeedMps);
-
-        Logger.recordOutput("Drive/LeftSpeedMps", leftSpeedMps);
-        Logger.recordOutput("Drive/RightSpeedMps", rightSpeedMps);
+        table.getEntry("LeftSpeedMps").setDouble(simLeftSpeedMps);
+        table.getEntry("RightSpeedMps").setDouble(simRightSpeedMps);
+        Logger.recordOutput("Drive/LeftSpeedMps", simLeftSpeedMps);
+        Logger.recordOutput("Drive/RightSpeedMps", simRightSpeedMps);
 
         // Linear and angular velocity
-        double linearVelocity = (leftSpeedMps + rightSpeedMps) / 2.0;
-        double angularVelocity = (rightSpeedMps - leftSpeedMps) / TRACK_WIDTH_METERS;
+        double linearVelocity = (simLeftSpeedMps + simRightSpeedMps) / 2.0;
+        double angularVelocity = (simRightSpeedMps - simLeftSpeedMps) / TRACK_WIDTH_METERS;
 
         table.getEntry("LinearVelocity").setDouble(linearVelocity);
         table.getEntry("AngularVelocity").setDouble(angularVelocity);
-
         Logger.recordOutput("Drive/LinearVelocity", linearVelocity);
         Logger.recordOutput("Drive/AngularVelocity", angularVelocity);
 
-        // --- Simulation integration ---
-        // Each 20ms loop, integrate velocity into cumulative distance
-        simLeftDistance += leftSpeedMps * 0.02;
-        simRightDistance += rightSpeedMps * 0.02;
-
-        // Integrate angular velocity into heading
+        // --- Simulation integration (20ms timestep) ---
+        simLeftDistance  += simLeftSpeedMps  * 0.02;
+        simRightDistance += simRightSpeedMps * 0.02;
         simHeadingRadians += angularVelocity * 0.02;
-        Rotation2d simHeading = new Rotation2d(simHeadingRadians);
 
-        // Update odometry with cumulative distances and simulated heading
+        Rotation2d simHeading = new Rotation2d(simHeadingRadians);
         odometry.update(simHeading, simLeftDistance, simRightDistance);
 
-        // Log pose (x, y, theta)
         double[] poseArray = {
             odometry.getPoseMeters().getX(),
             odometry.getPoseMeters().getY(),
             odometry.getPoseMeters().getRotation().getDegrees()
         };
         table.getEntry("Pose").setDoubleArray(poseArray);
-
         Logger.recordOutput("Drive/Pose", odometry.getPoseMeters());
     }
 
     private double shapeInput(double input) {
         double deadbanded = MathUtil.applyDeadband(input, 0.05);
         return 0.5 * deadbanded + 0.5 * Math.pow(deadbanded, 3);
+    }
+
+    public Pose2d getPose2d() {
+        return odometry.getPoseMeters();
+    }
+
+    public void resetPose(Pose2d pose) {
+        // Reset sim state to align with the auto start
+        simLeftDistance = 0.0;
+        simRightDistance = 0.0;
+        simHeadingRadians = pose.getRotation().getRadians();
+        simLeftSpeedMps = 0.0;
+        simRightSpeedMps = 0.0;
+
+        odometry.resetPosition(pose.getRotation(), simLeftDistance, simRightDistance, pose);
+    }
+
+    public ChassisSpeeds getChassisSpeeds() {
+        // Use instantaneous simulated wheel speeds (robot-relative)
+        double linearVelocity = (simLeftSpeedMps + simRightSpeedMps) / 2.0;
+        double angularVelocity = (simRightSpeedMps - simLeftSpeedMps) / TRACK_WIDTH_METERS;
+        return new ChassisSpeeds(linearVelocity, 0.0, angularVelocity);
+    }
+
+    public void driveRobot(ChassisSpeeds chassisSpeeds) {
+        // Expect ROBOT-RELATIVE speeds; convert to wheel speeds
+        var speeds = kinematics.toWheelSpeeds(chassisSpeeds);
+
+        double leftPercent  = MathUtil.clamp(speeds.leftMetersPerSecond  / MAX_WHEEL_SPEED, -1.0, 1.0);
+        double rightPercent = MathUtil.clamp(speeds.rightMetersPerSecond / MAX_WHEEL_SPEED, -1.0, 1.0);
+
+        motor1.set(ControlMode.PercentOutput, leftPercent);
+        motor2.set(ControlMode.PercentOutput, leftPercent);
+        motor3.set(ControlMode.PercentOutput, rightPercent);
+        motor4.set(ControlMode.PercentOutput, rightPercent);
+
+        // Critical: update sim via logDriveSignals so autos drive the sim
+        logDriveSignals(leftPercent, rightPercent);
+    }
+
+    public Command basicAuto() {
+        return new PathPlannerAuto("New Auto");
     }
 }
